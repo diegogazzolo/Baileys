@@ -1,14 +1,13 @@
 {
   "name": "@adiwajshing/baileys",
-  "version": "2.1.0",
+  "version": "3.1.0",
   "description": "WhatsApp Web API",
   "homepage": "https://github.com/adiwajshing/Baileys",
-  "main": "lib/WAClient/WAClient.js",
-  "types": "lib/WAClient/WAClient.d.ts",
+  "main": "lib/WAConnection/WAConnection.js",
+  "types": "lib/WAConnection/WAConnection.d.ts",
   "keywords": [
     "whatsapp",
     "js-whatsapp",
-    "reverse engineer",
     "whatsapp-api",
     "whatsapp-web",
     "whatsapp",
@@ -17,11 +16,15 @@
     "automation"
   ],
   "scripts": {
-    "prepare": "npm run build",
-    "test": "mocha --timeout 30000 -r ts-node/register src/*/Tests.ts",
+    "test": "mocha --timeout 240000 -r ts-node/register src/Tests/Tests.*.ts",
+    "prepare": "tsc",
     "lint": "eslint '*/*.ts' --quiet --fix",
-    "build": "tsc",
-    "example": "npx ts-node Example/example.ts"
+    "build:all": "tsc && typedoc",
+    "build:docs": "typedoc",
+    "build:tsc": "tsc",
+    "example": "npx ts-node Example/example.ts",
+    "gen-protobuf": "ts-node src/Binary/GenerateStatics.ts",
+    "browser-decode": "npx ts-node src/BrowserMessageDecoding.ts"
   },
   "author": "Adhiraj Singh",
   "license": "MIT",
@@ -29,29 +32,30 @@
     "url": "git@github.com:adiwajshing/baileys.git"
   },
   "dependencies": {
-    "curve25519-js": "0.0.4",
+    "@adiwajshing/keyed-db": "^0.1.8",
+    "curve25519-js": "^0.0.4",
     "futoin-hkdf": "^1.3.2",
+    "https-proxy-agent": "^5.0.0",
+    "jimp": "^0.16.1",
     "node-fetch": "^2.6.0",
-    "protobufjs": "^6.9.0",
+    "protobufjs": "^6.10.1",
     "qrcode-terminal": "^0.12.0",
-    "sharp": "^0.25.4",
-    "ws": "^7.3.0"
+    "ws": "^7.3.1"
   },
+  "files": [
+    "lib/WAConnection/*",
+    "lib/Binary/*",
+    "WAMessage/*"
+  ],
   "devDependencies": {
     "@types/mocha": "^7.0.2",
-    "@types/node": "^14.0.14",
-    "@types/sharp": "^0.25.0",
+    "@types/node": "^14.6.2",
     "@types/ws": "^7.2.6",
-    "@typescript-eslint/eslint-plugin": "^3.5.0",
-    "@typescript-eslint/parser": "^3.5.0",
     "assert": "^2.0.0",
     "dotenv": "^8.2.0",
-    "eslint": "^7.3.1",
-    "eslint-config-prettier": "^6.11.0",
-    "eslint-plugin-prettier": "^3.1.4",
-    "mocha": "^8.0.1",
-    "prettier": "^2.0.5",
-    "ts-node-dev": "^1.0.0-pre.49",
-    "typescript": "^3.9.5"
+    "mocha": "^8.1.3",
+    "ts-node-dev": "^1.0.0-pre.61",
+    "typedoc": "^0.18.0",
+    "typescript": "^3.9.7"
   }
 }

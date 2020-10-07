@@ -1,46 +1,65 @@
 import {
-    WAClient,
-    getNotificationType,
+    WAConnection,
     MessageType,
-    decodeMediaMessage,
     Presence,
     MessageOptions,
     Mimetype,
     WALocationMessage,
     MessageLogLevel,
-} from '../src/WAClient/WAClient'
+    WA_MESSAGE_STUB_TYPES,
+    ReconnectMode,
+    ProxyAgent,
+    waChatKey,
+} from '../src/WAConnection/WAConnection'
 import * as fs from 'fs'
 
 async function example() {
-    const client = new WAClient() // instantiate
-    client.autoReconnect = true // auto reconnect on disconnect
-    client.logLevel = MessageLogLevel.none // set to unhandled to see what kind of stuff you can implement
+    const conn = new WAConnection() // instantiate
+    conn.autoReconnect = ReconnectMode.onConnectionLost // only automatically reconnect when the connection breaks
+    conn.logLevel = MessageLogLevel.info // set to unhandled to see what kind of stuff you can implement
+    // if the gap between two messages is greater than 10s, fail the connection
+    conn.connectOptions.maxIdleTimeMs = 10*1000
+    conn.connectOptions.regenerateQRIntervalMs = 5000
+    // attempt to reconnect at most 10 times
+    conn.connectOptions.maxRetries = 10
+    conn.chatOrderingKey = waChatKey(true) // order chats such that pinned chats are on top
 
-    // connect or timeout in 20 seconds (loads the auth file credentials if present)
-    const [user, chats, contacts, unread] = await client.connect('./auth_info.json', 20 * 1000)
+    conn.on ('credentials-updated', () => {
+        // save credentials whenever updated
+        console.log (`credentials updated`)
+        const authInfo = conn.base64EncodedAuthInfo() // get all the auth info we need to restore this session
+        fs.writeFileSync('./auth_info.json', JSON.stringify(authInfo, null, '\t')) // save this info to a file
+    })
 
-    console.log('oh hello ' + user.name + ' (' + user.id + ')')
-    console.log('you have ' + unread.length + ' unread messages')
-    console.log('you have ' + chats.length + ' chats & ' + contacts.length + ' contacts')
+    // loads the auth file credentials if present
+    fs.existsSync('./auth_info.json') && conn.loadAuthInfo ('./auth_info.json')
+    // uncomment the following line to proxy the connection; some random proxy I got off of: https://proxyscrape.com/free-proxy-list
+    //conn.connectOptions.agent = ProxyAgent ('http://1.0.180.120:8080')
+    await conn.connect()
 
-    const authInfo = client.base64EncodedAuthInfo() // get all the auth info we need to restore this session
-    fs.writeFileSync('./auth_info.json', JSON.stringify(authInfo, null, '\t')) // save this info to a file
+    console.log('oh hello ' + conn.user.name + ' (' + conn.user.jid + ')')
+    console.log('you have ' + conn.chats.length + ' chats & ' + Object.keys(conn.contacts).length + ' contacts')
+    
+    // uncomment to load all unread messages
+    //const unread = await conn.loadAllUnreadMessages ()
+    //console.log ('you have ' + unread.length + ' unread messages')
+
     /*  Note: one can take this auth_info.json file and login again from any computer without having to scan the QR code, 
         and get full access to one's WhatsApp. Despite the convenience, be careful with this file */
-
-    client.setOnPresenceUpdate(json => console.log(json.id + ' presence is ' + json.type))
-    client.setOnMessageStatusChange(json => {
+    conn.on ('user-presence-update', json => console.log(json.id + ' presence is ' + json.type))
+    conn.on ('message-status-update', json => {
         const participant = json.participant ? ' (' + json.participant + ')' : '' // participant exists when the message is from a group
         console.log(`${json.to}${participant} acknlowledged message(s) ${json.ids} as ${json.type}`)
     })
      // set to false to NOT relay your own sent messages
-    client.setOnUnreadMessage(true, async (m) => {
-        const [notificationType, messageType] = getNotificationType(m) // get what type of notification it is -- message, group add notification etc.
-        console.log('got notification of type: ' + notificationType)
+    conn.on('message-new', async (m) => {
+        const messageStubType = WA_MESSAGE_STUB_TYPES[m.messageStubType] ||  'MESSAGE'
+        console.log('got notification of type: ' + messageStubType)
 
-        if (notificationType !== 'message') {
-            return
-        }
+        const messageContent = m.message
+        // if it is not a regular text or media message
+        if (!messageContent) return
+        
         if (m.key.fromMe) {
             console.log('relayed my own message')
             return
@@ -51,6 +70,7 @@ async function example() {
             // participant exists if the message is in a group
             sender += ' (' + m.key.participant + ')'
         }
+        const messageType = Object.keys (messageContent)[0] // message will always contain one key signifying what kind of message
         if (messageType === MessageType.text) {
             const text = m.message.conversation
             console.log(sender + ' sent: ' + text)
@@ -64,17 +84,17 @@ async function example() {
             const locMessage = m.message[messageType] as WALocationMessage
             console.log(`${sender} sent location (lat: ${locMessage.degreesLatitude}, long: ${locMessage.degreesLongitude})`)
             
-            decodeMediaMessage(m.message, './Media/media_loc_thumb_in_' + m.key.id) // save location thumbnail
+            await conn.downloadAndSaveMediaMessage(m, './Media/media_loc_thumb_in_' + m.key.id) // save location thumbnail
 
             if (messageType === MessageType.liveLocation) {
                 console.log(`${sender} sent live location for duration: ${m.duration/60}`)
             }
         } else {
-            // if it is a media (audio, image, video) message
+            // if it is a media (audio, image, video, sticker) message
             // decode, decrypt & save the media.
             // The extension to the is applied automatically based on the media type
             try {
-                const savedFile = await decodeMediaMessage(m.message, './Media/media_in_' + m.key.id)
+                const savedFile = await conn.downloadAndSaveMediaMessage(m, './Media/media_in_' + m.key.id)
                 console.log(sender + ' sent media, saved at: ' + savedFile)
             } catch (err) {
                 console.log('error in decoding message: ' + err)
@@ -82,20 +102,18 @@ async function example() {
         }
         // send a reply after 3 seconds
         setTimeout(async () => {
-            await client.sendReadReceipt(m.key.remoteJid, m.key.id) // send read receipt
-            await client.updatePresence(m.key.remoteJid, Presence.available) // tell them we're available
-            await client.updatePresence(m.key.remoteJid, Presence.composing) // tell them we're composing
+            await conn.chatRead(m.key.remoteJid) // mark chat read
+            await conn.updatePresence(m.key.remoteJid, Presence.available) // tell them we're available
+            await conn.updatePresence(m.key.remoteJid, Presence.composing) // tell them we're composing
 
             const options: MessageOptions = { quoted: m }
             let content
             let type: MessageType
             const rand = Math.random()
-            if (rand > 0.66) {
-                // choose at random
+            if (rand > 0.66) { // choose at random
                 content = 'hello!' // send a "hello!" & quote the message recieved
                 type = MessageType.text
-            } else if (rand > 0.33) {
-                // choose at random
+            } else if (rand > 0.33) { // choose at random
                 content = { degreesLatitude: 32.123123, degreesLongitude: 12.12123123 }
                 type = MessageType.location
             } else {
@@ -103,18 +121,20 @@ async function example() {
                 options.mimetype = Mimetype.gif
                 type = MessageType.video
             }
-            const response = await client.sendMessage(m.key.remoteJid, content, type, options)
-            console.log("sent message with ID '" + response.messageID + "' successfully: " + (response.status === 200))
+            const response = await conn.sendMessage(m.key.remoteJid, content, type, options)
+            console.log("sent message with ID '" + response.key.id + "' successfully")
         }, 3 * 1000)
     })
 
     /* example of custom functionality for tracking battery */
-    client.registerCallback(['action', null, 'battery'], json => {
+    conn.registerCallback(['action', null, 'battery'], json => {
         const batteryLevelStr = json[2][0][1].value
         const batterylevel = parseInt(batteryLevelStr)
         console.log('battery level: ' + batterylevel)
     })
-    client.setOnUnexpectedDisconnect(err => console.log('disconnected unexpectedly: ' + err))
+    conn.on('close', ({reason, isReconnecting}) => (
+        console.log ('oh no got disconnected: ' + reason + ', reconnecting: ' + isReconnecting)
+    ))
 }
 
 example().catch((err) => console.log(`encountered error: ${err}`))

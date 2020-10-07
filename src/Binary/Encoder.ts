@@ -2,12 +2,12 @@ import { WA } from './Constants'
 import { proto } from '../../WAMessage/WAMessage'
 
 export default class Encoder {
-    data: Array<number> = []
+    data: number[] = []
 
     pushByte(value: number) {
         this.data.push(value & 0xff)
     }
-    pushInt(value: number, n: number, littleEndian = false) {
+    pushInt(value: number, n: number, littleEndian=false) {
         for (let i = 0; i < n; i++) {
             const curShift = littleEndian ? i : n - 1 - i
             this.data.push((value >> (curShift * 8)) & 0xff)
@@ -16,17 +16,17 @@ export default class Encoder {
     pushInt20(value: number) {
         this.pushBytes([(value >> 16) & 0x0f, (value >> 8) & 0xff, value & 0xff])
     }
-    pushBytes(bytes: Uint8Array | Array<number>) {
-        this.data.push.apply(this.data, bytes)
+    pushBytes(bytes: Uint8Array | Buffer | number[]) {
+        bytes.forEach (b => this.data.push(b))
+        //this.data.push.apply(this.data, bytes)
     }
     pushString(str: string) {
-        const bytes = new TextEncoder().encode(str)
+        const bytes = Buffer.from (str, 'utf-8')
         this.pushBytes(bytes)
     }
     writeByteLength(length: number) {
-        if (length >= 4294967296) {
-            throw 'string too large to encode: ' + length
-        }
+        if (length >= 4294967296) throw new Error('string too large to encode: ' + length)
+        
         if (length >= 1 << 20) {
             this.pushByte(WA.Tags.BINARY_32)
             this.pushInt(length, 4) // 32 bit integer
@@ -51,14 +51,12 @@ export default class Encoder {
         if (token < 245) {
             this.pushByte(token)
         } else if (token <= 500) {
-            throw 'invalid token'
+            throw new Error('invalid token')
         }
     }
     writeString(token: string, i: boolean = null) {
-        if (token === 'c.us') {
-            token = 's.whatsapp.net'
-        }
-
+        if (token === 'c.us') token = 's.whatsapp.net'
+        
         const tokenIndex = WA.SingleByteTokens.indexOf(token)
         if (!i && token === 's.whatsapp.net') {
             this.writeToken(tokenIndex)
@@ -69,7 +67,7 @@ export default class Encoder {
                 const overflow = tokenIndex - WA.Tags.SINGLE_BYTE_MAX
                 const dictionaryIndex = overflow >> 8
                 if (dictionaryIndex < 0 || dictionaryIndex > 3) {
-                    throw 'double byte dict token out of range: ' + token + ', ' + tokenIndex
+                    throw new Error('double byte dict token out of range: ' + token + ', ' + tokenIndex)
                 }
                 this.writeToken(WA.Tags.DICTIONARY_0 + dictionaryIndex)
                 this.writeToken(overflow % 256)
@@ -101,24 +99,23 @@ export default class Encoder {
             this.pushBytes([WA.Tags.LIST_16, listSize])
         }
     }
-    writeChildren(children: string | Array<WA.Node> | Object) {
-        if (!children) {
-            return
-        }
+    writeChildren(children: string | Array<WA.Node> | Buffer | Object) {
+        if (!children) return
 
         if (typeof children === 'string') {
             this.writeString(children, true)
+        } else if (Buffer.isBuffer(children)) {
+            this.writeByteLength (children.length)
+            this.pushBytes(children)
         } else if (Array.isArray(children)) {
             this.writeListStart(children.length)
-            children.forEach((c) => {
-                if (c) this.writeNode(c)
-            })
-        } else if (typeof children === 'object') {
+            children.forEach(c => c && this.writeNode(c))
+        }  else if (typeof children === 'object') {
             const buffer = WA.Message.encode(children as proto.WebMessageInfo).finish()
             this.writeByteLength(buffer.length)
             this.pushBytes(buffer)
         } else {
-            throw 'invalid children: ' + children + ' (' + typeof children + ')'
+            throw new Error('invalid children: ' + children + ' (' + typeof children + ')')
         }
     }
     getValidKeys(obj: Object) {
@@ -128,7 +125,7 @@ export default class Encoder {
         if (!node) {
             return
         } else if (node.length !== 3) {
-            throw 'invalid node given: ' + node
+            throw new Error('invalid node given: ' + node)
         }
         const validAttributes = this.getValidKeys(node[1])
 
